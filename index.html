@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Morse Code Generator (HTML)</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#9aa4b2;--accent:#60a5fa}
+    html,body{height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,Segoe UI,Roboto,"Helvetica Neue",Arial}
+    body{background:linear-gradient(180deg,#071029 0%, #081426 100%);color:#e6eef8;display:flex;align-items:center;justify-content:center;padding:28px}
+    .card{width:980px;max-width:96%;background:linear-gradient(180deg,rgba(255,255,255,0.02),rgba(0,0,0,0.05));border-radius:12px;padding:18px;box-shadow:0 10px 30px rgba(2,6,23,0.6)}
+    h1{margin:0 0 8px;font-size:20px}
+    textarea{width:100%;min-height:100px;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.06);background:transparent;color:inherit;resize:vertical}
+    .controls{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+    .control{background:rgba(255,255,255,0.02);padding:8px;border-radius:8px;display:flex;flex-direction:column;min-width:120px}
+    label{font-size:12px;color:var(--muted);margin-bottom:6px}
+    input[type=range]{width:160px}
+    .buttons{display:flex;gap:8px;margin-top:12px}
+    button{background:var(--accent);color:#04263b;padding:8px 12px;border-radius:8px;border:none;cursor:pointer}
+    button.secondary{background:rgba(255,255,255,0.06);color:var(--muted)}
+    .morse-preview{margin-top:12px;padding:10px;border-radius:8px;background:rgba(255,255,255,0.02);font-family:monospace;min-height:56px}
+    .char-grid{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+    .char{background:rgba(255,255,255,0.02);padding:8px;border-radius:6px;min-width:46px;text-align:center}
+    .char.playing{box-shadow:0 0 0 3px rgba(96,165,250,0.12);background:linear-gradient(90deg, rgba(96,165,250,0.06), rgba(96,165,250,0.02))}
+    footer{margin-top:10px;font-size:12px;color:var(--muted)}
+  </style>
+</head>
+<body>
+  <div class="card" role="application">
+    <h1>Morse Code Generator — HTML + WebAudio</h1>
+
+    <label for="text">Enter text</label>
+    <textarea id="text">SOS Hello World 123</textarea>
+
+    <div class="controls">
+      <div class="control">
+        <label>WPM (words per minute)</label>
+        <input id="wpm" type="range" min="5" max="40" value="20">
+        <div id="wpmVal">20 WPM</div>
+      </div>
+
+      <div class="control">
+        <label>Frequency (Hz)</label>
+        <input id="freq" type="range" min="200" max="1200" value="600">
+        <div id="freqVal">600 Hz</div>
+      </div>
+
+      <div class="control">
+        <label>Volume</label>
+        <input id="vol" type="range" min="0" max="1" step="0.01" value="0.6">
+        <div id="volVal">60%</div>
+      </div>
+
+      <div class="control" style="min-width:200px;">
+        <label>Preview / Morse</label>
+        <div id="preview" class="morse-preview" aria-live="polite"></div>
+      </div>
+    </div>
+
+    <div class="buttons">
+      <button id="play">Play</button>
+      <button id="stop" class="secondary">Stop</button>
+      <button id="copy" class="secondary">Copy Morse</button>
+      <button id="download" class="secondary">Download WAV</button>
+      <button id="clear" class="secondary">Clear</button>
+    </div>
+
+    <div class="char-grid" id="charGrid" aria-hidden="false"></div>
+
+    <footer id="note">Dot length = <span id="dotMs"></span> ms at current WPM. Uses WebAudio API. WAV export may take a moment for long messages.</footer>
+  </div>
+
+  <script>
+    // Morse table (common characters)
+    const MORSE = {
+      a:'.-',b:'-...',c:'-.-.',d:'-..',e:'.',f:'..-.',g:'--.',h:'....',i:'..',j:'.---',k:'-.-',l:'.-..',m:'--',n:'-.',o:'---',p:'.--.',q:'--.-',r:'.-.',s:'...',t:'-',u:'..-',v:'...-',w:'.--',x:'-..-',y:'-.--',z:'--..',
+      '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.',
+      '.':'.-.-.-',',':'--..--',':':'---...','?':'..--..',"'":'.----.','!':'-.-.--','/':'-..-.','(':'-.--.',')':'-.--.-','&':'.-...',';':'-.-.-.','=':'-...-','+':'.-.-.','-':'-....-','_':'..--.-','"':'.-..-.','$':'...-..-','@':'.--.-.',' ':' '
+    };
+
+    const els = {
+      text: document.getElementById('text'),
+      wpm: document.getElementById('wpm'),
+      freq: document.getElementById('freq'),
+      vol: document.getElementById('vol'),
+      preview: document.getElementById('preview'),
+      play: document.getElementById('play'),
+      stop: document.getElementById('stop'),
+      copy: document.getElementById('copy'),
+      download: document.getElementById('download'),
+      clear: document.getElementById('clear'),
+      wpmVal: document.getElementById('wpmVal'),
+      freqVal: document.getElementById('freqVal'),
+      volVal: document.getElementById('volVal'),
+      charGrid: document.getElementById('charGrid'),
+      dotMs: document.getElementById('dotMs')
+    };
+
+    function textToMorse(txt){
+      return txt.toLowerCase().split('').map(ch=>MORSE[ch]||'').join(' ')
+        .replace(/\s+/g,' ').trim();
+    }
+
+    function renderPreview(){
+      const mor = textToMorse(els.text.value);
+      els.preview.textContent = mor || '(empty)';
+      renderChars(els.text.value);
+      dotMsUpdate();
+    }
+
+    function renderChars(txt){
+      els.charGrid.innerHTML = '';
+      [...txt].forEach((ch,i)=>{
+        const node = document.createElement('div');
+        node.className = 'char';
+        const m = MORSE[ch?.toLowerCase?.()]||'—';
+        node.innerHTML = `<div style="font-weight:600">${ch===' ' ? '␣' : ch}</div><div style="font-size:12px;color:var(--muted);font-family:monospace">${m}</div>`;
+        node.dataset.index = i;
+        els.charGrid.appendChild(node);
+      });
+    }
+
+    function dotMs(){
+      const w = Math.max(1, Number(els.wpm.value));
+      return 1200 / w;
+    }
+    function dotMsUpdate(){ els.dotMs.textContent = Math.round(dotMs()) }
+
+    // Build sequence: array of {type:'tone'|'silence', durationMs, charIndex}
+    function buildSequence(morseStr){
+      const units = dotMs();
+      const seq = [];
+      const groups = morseStr.split(' ');
+      let charIndex = 0;
+      for(let g=0; g<groups.length; g++){
+        const group = groups[g];
+        if(group === ''){ seq.push({type:'silence',duration:units*7,charIndex}); charIndex++; continue }
+        for(let s=0;s<group.length;s++){
+          const sym = group[s];
+          if(sym === '.') seq.push({type:'tone',duration:units,charIndex})
+          else if(sym === '-') seq.push({type:'tone',duration:units*3,charIndex});
+          if(s < group.length-1) seq.push({type:'silence',duration:units});
+        }
+        if(g < groups.length-1){
+          if(groups[g+1] === ''){ seq.push({type:'silence',duration:units*7,charIndex}); g++; }
+          else seq.push({type:'silence',duration:units*3,charIndex});
+        }
+        charIndex++;
+      }
+      return seq;
+    }
+
+    let audioCtx = null;
+    let gainNode = null;
+    let playTimers = [];
+
+    function clearTimers(){ playTimers.forEach(t=>clearTimeout(t)); playTimers=[] }
+    function stopAll(){ clearTimers(); if(audioCtx){ try{ audioCtx.close() }catch(e){} audioCtx = null; gainNode=null } unhighlight(); }
+
+    function highlightChar(idx){ unhighlight(); if(idx==null) return; const el = els.charGrid.querySelector(`[data-index='${idx}']`); if(el) el.classList.add('playing') }
+    function unhighlight(){ els.charGrid.querySelectorAll('.char.playing').forEach(n=>n.classList.remove('playing')) }
+
+    function schedulePlay(seq){
+      stopAll();
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      gainNode = audioCtx.createGain(); gainNode.gain.value = Number(els.vol.value); gainNode.connect(audioCtx.destination);
+      const startAt = 0; // ms offset from now
+      let cursor = 0;
+      seq.forEach((item,idx)=>{
+        const t = setTimeout(()=>{
+          if(!audioCtx) return;
+          if(item.type === 'tone'){
+            const osc = audioCtx.createOscillator(); osc.frequency.value = Number(els.freq.value); osc.connect(gainNode); osc.start();
+            setTimeout(()=>{ try{ osc.stop(); osc.disconnect() }catch(e){} }, Math.max(1, Math.round(item.duration)));
+            highlightChar(item.charIndex);
+          } else {
+            highlightChar(item.charIndex);
+          }
+          if(idx === seq.length-1){
+            const endT = setTimeout(()=>{ stopAll() }, Math.max(1, Math.round(item.duration))+40); playTimers.push(endT);
+          }
+        }, cursor);
+        playTimers.push(t);
+        cursor += Math.max(0, Math.round(item.duration));
+      });
+    }
+
+    // Play button
+    els.play.addEventListener('click', ()=>{
+      const mor = textToMorse(els.text.value);
+      if(!mor) return alert('Enter some text');
+      const seq = buildSequence(mor);
+      schedulePlay(seq);
+    });
+    els.stop.addEventListener('click', stopAll);
+
+    // Copy morse
+    els.copy.addEventListener('click', ()=>{ const mor = textToMorse(els.text.value); navigator.clipboard?.writeText(mor).then(()=>{}) });
+
+    // Clear
+    els.clear.addEventListener('click', ()=>{ els.text.value=''; renderPreview() });
+
+    // Download WAV: render to OfflineAudioContext and export
+    els.download.addEventListener('click', async ()=>{
+      const mor = textToMorse(els.text.value); if(!mor) return alert('Enter text to export');
+      const seq = buildSequence(mor);
+      const sampleRate = 44100;
+      const totalMs = seq.reduce((s,it)=>s+it.duration,0);
+      const length = Math.ceil((totalMs/1000)*sampleRate) + 1;
+      const offline = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(1, length, sampleRate);
+      const master = offline.createGain(); master.gain.value = Number(els.vol.value); master.connect(offline.destination);
+
+      let cursorSamples = 0;
+      seq.forEach(it=>{
+        if(it.type === 'tone'){
+          const osc = offline.createOscillator(); osc.frequency.value = Number(els.freq.value);
+          const g = offline.createGain(); g.gain.value = 1;
+          osc.connect(g); g.connect(master);
+          const start = cursorSamples / sampleRate;
+          const durSamples = Math.round((it.duration/1000)*sampleRate);
+          const end = (cursorSamples + durSamples) / sampleRate;
+          try{ osc.start(start); osc.stop(end) }catch(e){}
+        }
+        cursorSamples += Math.round((it.duration/1000)*sampleRate);
+      });
+
+      const rendered = await offline.startRendering();
+      const ch = rendered.getChannelData(0);
+      const wav = encodeWAV(ch, sampleRate);
+      const blob = new Blob([wav], {type:'audio/wav'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = 'morse.wav'; a.click(); URL.revokeObjectURL(url);
+    });
+
+    function encodeWAV(samples, sampleRate){
+      const buffer = new ArrayBuffer(44 + samples.length*2);
+      const view = new DataView(buffer);
+      function writeString(offset,str){ for(let i=0;i<str.length;i++) view.setUint8(offset+i,str.charCodeAt(i)) }
+      writeString(0,'RIFF'); view.setUint32(4,36 + samples.length*2, true); writeString(8,'WAVE'); writeString(12,'fmt '); view.setUint32(16,16,true); view.setUint16(20,1,true); view.setUint16(22,1,true); view.setUint32(24,sampleRate,true); view.setUint32(28,sampleRate*2,true); view.setUint16(32,2,true); view.setUint16(34,16,true); writeString(36,'data'); view.setUint32(40,samples.length*2,true);
+      let offset=44; for(let i=0;i<samples.length;i++,offset+=2){ let s=Math.max(-1,Math.min(1,samples[i])); view.setInt16(offset,s<0? s*0x8000 : s*0x7fff, true) }
+      return view;
+    }
+
+    // update UI values live
+    [els.wpm, els.freq, els.vol].forEach(i=>i.addEventListener('input', ()=>{ els.wpmVal.textContent = `${els.wpm.value} WPM`; els.freqVal.textContent = `${els.freq.value} Hz`; els.volVal.textContent = `${Math.round(els.vol.value*100)}%`; renderPreview() }));
+    els.text.addEventListener('input', renderPreview);
+
+    // init
+    renderPreview();
+  </script>
+</body>
+</html>
